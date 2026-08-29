@@ -38,12 +38,8 @@ export default {
       return json({ error: 'Invalid "url" parameter' }, 400);
     }
 
-    if (!env.FIRECRAWL_API_KEY) {
-      return json({ error: 'FIRECRAWL_API_KEY secret is not set' }, 500);
-    }
-
     try {
-      const html = await scrapeWithFirecrawl(parsed.toString(), env.FIRECRAWL_API_KEY);
+      const html = await scrapeWithFirecrawl(parsed.toString());
       const hxGet = extractHxGet(html);
 
       if (!hxGet) {
@@ -58,7 +54,7 @@ export default {
       const origin = parsed.origin;
       const downloadUrl = /^https?:\/\//i.test(hxGet) ? hxGet : new URL(hxGet, origin).toString();
 
-      const direct = await fetchHxRedirect(downloadUrl, parsed.toString(), env.CORSFIX_KEY);
+      const direct = await fetchHxRedirect(downloadUrl, parsed.toString());
 
       return json({ url: targetUrl, direct });
     } catch (err) {
@@ -70,12 +66,11 @@ export default {
 /**
  * Calls Firecrawl's /v2/scrape endpoint and returns the page HTML.
  */
-async function scrapeWithFirecrawl(url, apiKey) {
+async function scrapeWithFirecrawl(url) {
   const res = await fetch(FIRECRAWL_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       url,
@@ -118,21 +113,20 @@ function extractHxGet(html) {
 }
 
 /**
- * Fetches the download endpoint through Corsfix's proxy, sending the same
- * headers htmx would send, and returns the HX-Redirect response header.
+ * Fetches the download endpoint through Corsfix's proxy (keyless — relies on
+ * your Worker's outbound domain being whitelisted in the Corsfix dashboard
+ * at https://app.corsfix.com/applications), sending the same headers htmx
+ * would send, and returns the HX-Redirect response header.
  */
-async function fetchHxRedirect(downloadUrl, currentUrl, corsfixKey) {
+async function fetchHxRedirect(downloadUrl, currentUrl) {
   const proxiedUrl = CORSFIX_PROXY + downloadUrl;
 
-  const headers = {
-    'HX-Request': 'true',
-    'HX-Current-URL': currentUrl,
-  };
-  if (corsfixKey) {
-    headers['x-corsfix-key'] = corsfixKey;
-  }
-
-  const res = await fetch(proxiedUrl, { headers });
+  const res = await fetch(proxiedUrl, {
+    headers: {
+      'HX-Request': 'true',
+      'HX-Current-URL': currentUrl,
+    },
+  });
 
   const redirect = res.headers.get('HX-Redirect');
   if (redirect) return redirect;
