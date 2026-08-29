@@ -64,6 +64,13 @@ async function getDirectUrl(browser, url) {
     await page.setExtraHTTPHeaders({
       'Accept-Language': 'en-US,en;q=0.9',
     });
+    await page.setViewport({ width: 1366, height: 768 });
+
+    // Apply stealth evasions before any page script runs. These replicate
+    // puppeteer-extra-plugin-stealth's core techniques inline, since the npm
+    // package itself doesn't bundle cleanly for Workers / Browser Rendering
+    // (it expects a locally-launched Chromium, not a remote CF-managed one).
+    await page.evaluateOnNewDocument(stealthInjections);
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
@@ -91,6 +98,51 @@ async function getDirectUrl(browser, url) {
   } finally {
     await page.close();
   }
+}
+
+/**
+ * Runs inside the page context before any site JS executes.
+ * Patches the common signals sites use to detect headless/automated Chrome.
+ * These are the same core evasions puppeteer-extra-plugin-stealth applies.
+ */
+function stealthInjections() {
+  // 1. navigator.webdriver -> false (the single biggest automation tell)
+  Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+  // 2. window.chrome -> present (headless Chrome omits this by default)
+  window.chrome = window.chrome || { runtime: {} };
+
+  // 3. navigator.permissions.query -> avoid the headless-only "denied" quirk
+  const originalQuery = window.navigator.permissions.query;
+  window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+      ? Promise.resolve({ state: Notification.permission })
+      : originalQuery(parameters);
+
+  // 4. navigator.plugins -> non-empty (headless reports an empty array)
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+      { name: 'Chrome PDF Plugin' },
+      { name: 'Chrome PDF Viewer' },
+      { name: 'Native Client' },
+    ],
+  });
+
+  // 5. navigator.languages -> realistic, consistent with Accept-Language
+  Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en'],
+  });
+
+  // 6. WebGL vendor/renderer -> spoof away the SwiftShader/headless signature
+  const getParameterProto = WebGLRenderingContext.prototype.getParameter;
+  WebGLRenderingContext.prototype.getParameter = function (parameter) {
+    if (parameter === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
+    if (parameter === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
+    return getParameterProto.call(this, parameter);
+  };
+
+  // 7. navigator.hardwareConcurrency -> plausible non-zero value
+  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
 }
 
 function json(data, status = 200) {
