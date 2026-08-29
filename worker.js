@@ -1,27 +1,26 @@
 /**
- * Cloudflare Worker using Browser Rendering (real headless Chrome via
- * @cloudflare/puppeteer) to replicate the original Playwright flow:
+ * Cloudflare Worker: resolves the direct download URL from a buzzheavier-style
+ * htmx page, using two external services to get around Cloudflare bot
+ * protection (since Workers' own IPs get blocked):
  *
- *   1. Navigate to the page with a real browser.
- *   2. Wait for the htmx download button: a[hx-get*="/download"]
- *   3. In-page, fetch the hx-get endpoint with HX-Request / HX-Current-URL
- *      headers and read back the HX-Redirect response header.
+ *   1. Firecrawl (https://firecrawl.dev) scrapes the page HTML on your behalf,
+ *      using their own scraping infrastructure/anti-bot handling.
+ *   2. From that HTML, extract the <a hx-get="..."> download endpoint.
+ *   3. Fetch that endpoint through Corsfix's proxy (https://corsfix.com),
+ *      sending the HX-Request / HX-Current-URL headers, and read back
+ *      the HX-Redirect response header.
  *
- * REQUIREMENTS:
- *   - Workers Paid plan (Browser Rendering requires it).
- *   - `npm install @cloudflare/puppeteer` in your worker project.
- *   - A Browser Rendering binding in wrangler.toml (see wrangler.toml below).
+ * REQUIRED SECRETS (set via `wrangler secret put NAME`):
+ *   - FIRECRAWL_API_KEY   your Firecrawl API key (fc-...)
+ *   - CORSFIX_KEY         your Corsfix API key (cfx_...) — optional if you've
+ *                         whitelisted your domain in the Corsfix dashboard
+ *                         instead; falls back to no key if unset.
  *
- * IMPORTANT CAVEAT: Browser Rendering sessions still originate from
- * Cloudflare's own network/IP ranges. If buzzheavier's Bot Management is
- * blocking based on ASN/IP reputation (not just JS-fingerprinting), a real
- * browser here may still get challenged or blocked. This gets you past
- * pure "no-JS / fingerprint-only" blocks, not IP-reputation blocks.
- *
- * Usage:  GET https://your-worker.example.workers.dev/?url=https://example.com/some-page
+ * Usage: GET https://your-worker.example.workers.dev/?url=https://buzzheavier.com/xxxx
  */
 
-import puppeteer from '@cloudflare/puppeteer';
+const FIRECRAWL_ENDPOINT = 'https://api.firecrawl.dev/v2/scrape';
+const CORSFIX_PROXY = 'https://proxy.corsfix.com/?';
 
 export default {
   async fetch(request, env) {
@@ -39,110 +38,113 @@ export default {
       return json({ error: 'Invalid "url" parameter' }, 400);
     }
 
-    let browser;
+    if (!env.FIRECRAWL_API_KEY) {
+      return json({ error: 'FIRECRAWL_API_KEY secret is not set' }, 500);
+    }
+
     try {
-      browser = await puppeteer.launch(env.MYBROWSER);
-      const direct = await getDirectUrl(browser, parsed.toString());
+      const html = await scrapeWithFirecrawl(parsed.toString(), env.FIRECRAWL_API_KEY);
+      const hxGet = extractHxGet(html);
+
+      if (!hxGet) {
+        return json({
+          url: targetUrl,
+          direct: null,
+          note: 'No hx-get download link found in the scraped HTML.',
+          htmlPreview: html.slice(0, 1500),
+        });
+      }
+
+      const origin = parsed.origin;
+      const downloadUrl = /^https?:\/\//i.test(hxGet) ? hxGet : new URL(hxGet, origin).toString();
+
+      const direct = await fetchHxRedirect(downloadUrl, parsed.toString(), env.CORSFIX_KEY);
+
       return json({ url: targetUrl, direct });
     } catch (err) {
       return json({ error: err.message || 'Unknown error', url: targetUrl }, 500);
-    } finally {
-      if (browser) {
-        await browser.close();
-      }
     }
   },
 };
 
-async function getDirectUrl(browser, url) {
-  const page = await browser.newPage();
+/**
+ * Calls Firecrawl's /v2/scrape endpoint and returns the page HTML.
+ */
+async function scrapeWithFirecrawl(url, apiKey) {
+  const res = await fetch(FIRECRAWL_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      url,
+      onlyMainContent: true,
+      maxAge: 172800000,
+      parsers: ['pdf'],
+      formats: ['html'],
+    }),
+  });
 
-  try {
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
-    );
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': 'en-US,en;q=0.9',
-    });
-    await page.setViewport({ width: 1366, height: 768 });
+  const body = await res.text();
 
-    // Apply stealth evasions before any page script runs. These replicate
-    // puppeteer-extra-plugin-stealth's core techniques inline, since the npm
-    // package itself doesn't bundle cleanly for Workers / Browser Rendering
-    // (it expects a locally-launched Chromium, not a remote CF-managed one).
-    await page.evaluateOnNewDocument(stealthInjections);
-
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-    await page.waitForSelector('a[hx-get*="/download"]', { timeout: 10000 });
-
-    const direct = await page.evaluate(async () => {
-      try {
-        const btn = document.querySelector('a[hx-get*="/download"]');
-        if (!btn) return null;
-
-        const res = await fetch(window.location.origin + btn.getAttribute('hx-get'), {
-          headers: {
-            'HX-Request': 'true',
-            'HX-Current-URL': window.location.href,
-          },
-        });
-
-        return res.headers.get('HX-Redirect');
-      } catch {
-        return null;
-      }
-    });
-
-    return direct;
-  } finally {
-    await page.close();
+  if (!res.ok) {
+    throw new Error(`Firecrawl request failed (${res.status}): ${body.slice(0, 500)}`);
   }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(`Firecrawl returned non-JSON response: ${body.slice(0, 500)}`);
+  }
+
+  const html = parsed?.data?.html;
+  if (!html) {
+    throw new Error(`Firecrawl response had no html field: ${body.slice(0, 500)}`);
+  }
+
+  return html;
 }
 
 /**
- * Runs inside the page context before any site JS executes.
- * Patches the common signals sites use to detect headless/automated Chrome.
- * These are the same core evasions puppeteer-extra-plugin-stealth applies.
+ * Extracts the hx-get attribute value from the first <a> tag whose
+ * hx-get contains "/download".
  */
-function stealthInjections() {
-  // 1. navigator.webdriver -> false (the single biggest automation tell)
-  Object.defineProperty(navigator, 'webdriver', { get: () => false });
+function extractHxGet(html) {
+  const regex = /<a\b[^>]*\bhx-get\s*=\s*["']([^"']*\/download[^"']*)["'][^>]*>/i;
+  const match = html.match(regex);
+  return match ? match[1] : null;
+}
 
-  // 2. window.chrome -> present (headless Chrome omits this by default)
-  window.chrome = window.chrome || { runtime: {} };
+/**
+ * Fetches the download endpoint through Corsfix's proxy, sending the same
+ * headers htmx would send, and returns the HX-Redirect response header.
+ */
+async function fetchHxRedirect(downloadUrl, currentUrl, corsfixKey) {
+  const proxiedUrl = CORSFIX_PROXY + downloadUrl;
 
-  // 3. navigator.permissions.query -> avoid the headless-only "denied" quirk
-  const originalQuery = window.navigator.permissions.query;
-  window.navigator.permissions.query = (parameters) =>
-    parameters.name === 'notifications'
-      ? Promise.resolve({ state: Notification.permission })
-      : originalQuery(parameters);
-
-  // 4. navigator.plugins -> non-empty (headless reports an empty array)
-  Object.defineProperty(navigator, 'plugins', {
-    get: () => [
-      { name: 'Chrome PDF Plugin' },
-      { name: 'Chrome PDF Viewer' },
-      { name: 'Native Client' },
-    ],
-  });
-
-  // 5. navigator.languages -> realistic, consistent with Accept-Language
-  Object.defineProperty(navigator, 'languages', {
-    get: () => ['en-US', 'en'],
-  });
-
-  // 6. WebGL vendor/renderer -> spoof away the SwiftShader/headless signature
-  const getParameterProto = WebGLRenderingContext.prototype.getParameter;
-  WebGLRenderingContext.prototype.getParameter = function (parameter) {
-    if (parameter === 37445) return 'Intel Inc.'; // UNMASKED_VENDOR_WEBGL
-    if (parameter === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
-    return getParameterProto.call(this, parameter);
+  const headers = {
+    'HX-Request': 'true',
+    'HX-Current-URL': currentUrl,
   };
+  if (corsfixKey) {
+    headers['x-corsfix-key'] = corsfixKey;
+  }
 
-  // 7. navigator.hardwareConcurrency -> plausible non-zero value
-  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+  const res = await fetch(proxiedUrl, { headers });
+
+  const redirect = res.headers.get('HX-Redirect');
+  if (redirect) return redirect;
+
+  // If the header didn't come through, surface enough info to debug —
+  // some proxies don't forward non-standard response headers by default.
+  const bodyPreview = (await res.text()).slice(0, 500);
+  throw new Error(
+    `No HX-Redirect header in Corsfix proxy response (status ${res.status}). ` +
+      `Response headers: ${JSON.stringify([...res.headers.entries()])}. ` +
+      `Body preview: ${bodyPreview}`
+  );
 }
 
 function json(data, status = 200) {
