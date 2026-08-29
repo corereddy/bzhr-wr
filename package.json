@@ -1,0 +1,15 @@
+{
+  "name": "get-direct-url-browser-rendering",
+  "version": "1.0.0",
+  "private": true,
+  "main": "get-direct-url-browser-rendering.js",
+  "dependencies": {
+    "@cloudflare/puppeteer": "^0.0.14"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  },
+  "scripts": {
+    "deploy": "wrangler deploy"
+  }
+}
