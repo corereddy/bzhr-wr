@@ -18,32 +18,56 @@ export default {
       });
     }
 
-    // Convert wss:// URL to https:// REST API endpoint
     const parsedWsUrl = new URL(browserlessUrl);
     const token = parsedWsUrl.searchParams.get('token');
     const apiUrl = `https://${parsedWsUrl.host}/function?token=${token}`;
 
     try {
-      // Browserless runs this Puppeteer script on their server
       const code = `
         export default async function({ page }) {
-          await page.goto('https://buzzheavier.com/${id}', { waitUntil: 'domcontentloaded' });
-          
-          const redirectUrl = await page.evaluate(async () => {
-            const btn = document.querySelector('a[hx-get*="/download"]');
-            if (!btn) return null;
+          await page.goto('https://buzzheavier.com/${id}', { 
+            waitUntil: 'networkidle0',
+            timeout: 30000 
+          });
 
-            const res = await fetch(
-              window.location.origin + btn.getAttribute("hx-get"),
-              {
+          // 1. Wait for the download button or any link containing /download
+          await page.waitForSelector('a[hx-get*="/download"], a[href*="/download"], button[hx-get*="/download"]', { 
+            timeout: 10000 
+          }).catch(() => null);
+
+          // 2. Extract and trigger the download endpoint
+          const redirectUrl = await page.evaluate(async () => {
+            const btn = document.querySelector('a[hx-get*="/download"], button[hx-get*="/download"]');
+            
+            if (btn) {
+              const endpoint = btn.getAttribute("hx-get");
+              const targetUrl = endpoint.startsWith("http") ? endpoint : (window.location.origin + endpoint);
+
+              const res = await fetch(targetUrl, {
+                method: "GET",
+                redirect: "manual",
                 headers: {
                   "HX-Request": "true",
                   "HX-Current-URL": window.location.href
                 }
-              }
-            );
+              });
 
-            return res.headers.get("HX-Redirect");
+              // Check HX-Redirect header
+              const hxRedirect = res.headers.get("HX-Redirect") || res.headers.get("hx-redirect");
+              if (hxRedirect) return hxRedirect;
+
+              // Check Location header if standard 3xx redirect
+              const locationHeader = res.headers.get("location");
+              if (locationHeader) return locationHeader;
+            }
+
+            // Fallback: Check if there is a direct href link already present
+            const directLink = document.querySelector('a[href*="/download/"], a[download]');
+            if (directLink) {
+              return directLink.href;
+            }
+
+            return null;
           });
 
           return {
