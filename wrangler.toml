@@ -4,4 +4,4 @@ compatibility_date = "2026-09-04"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-BROWSER_WS_ENDPOINT = "wss://production-sfo.browserless.io?token=2VCGARGwme2LmgAde3e547f037305d9721120664337acf42d
+BROWSER_WS_ENDPOINT = "wss://production-sfo.browserless.io?token=2VCGARGwme2LmgAde3e547f037305d9721120664337acf42d"
