@@ -1,15 +1,14 @@
 {
-  "name": "get-direct-url-browser-rendering",
+  "name": "buzzheavier-scraper-worker",
   "version": "1.0.0",
-  "private": true,
-  "main": "get-direct-url-browser-rendering.js",
-  "dependencies": {
-    "@cloudflare/puppeteer": "^0.0.14"
-  },
-  "devDependencies": {
-    "wrangler": "^3.90.0"
-  },
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "puppeteer-core": "^22.12.1"
+  },
+  "devDependencies": {
+    "wrangler": "^3.60.0"
   }
 }
