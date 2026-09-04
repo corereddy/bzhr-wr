@@ -25,41 +25,53 @@ export default {
     try {
       const code = `
         export default async function({ page }) {
-          try {
-            await page.goto('https://buzzheavier.com/${id}', { waitUntil: 'domcontentloaded' });
-            await page.waitForSelector('a[hx-get*="/download"]', { timeout: 10000 });
+          // Set standard desktop user agent to avoid headless bot detection
+          await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36');
+          
+          const targetUrl = 'https://buzzheavier.com/${id}';
+          console.log('Navigating to:', targetUrl);
+          
+          await page.goto(targetUrl, { 
+            waitUntil: 'domcontentloaded',
+            timeout: 20000 
+          });
 
-            const direct = await page.evaluate(async () => {
-              try {
-                const btn = document.querySelector('a[hx-get*="/download"]');
-                if (!btn) return null;
+          // Wait for download trigger
+          await page.waitForSelector('a[hx-get*="/download"], button[hx-get*="/download"], a[href*="/download"]', { 
+            timeout: 8000 
+          }).catch(() => console.log('Selector timeout: checking DOM directly'));
 
-                const res = await fetch(
-                  window.location.origin + btn.getAttribute("hx-get"),
-                  {
-                    headers: {
-                      "HX-Request": "true",
-                      "HX-Current-URL": window.location.href
-                    }
-                  }
-                );
-
-                return res.headers.get("HX-Redirect");
-              } catch (e) {
-                return null;
+          const direct = await page.evaluate(async () => {
+            try {
+              const btn = document.querySelector('a[hx-get*="/download"], button[hx-get*="/download"]');
+              if (!btn) {
+                // Fallback to regular link href if HTMX attribute is absent
+                const fallbackLink = document.querySelector('a[href*="/download"]');
+                return fallbackLink ? fallbackLink.href : null;
               }
-            });
 
-            return {
-              data: { directUrl: direct },
-              type: 'application/json'
-            };
-          } catch (err) {
-            return {
-              data: { error: err.message, directUrl: null },
-              type: 'application/json'
-            };
-          }
+              const path = btn.getAttribute("hx-get");
+              const requestUrl = path.startsWith("http") ? path : (window.location.origin + path);
+
+              const res = await fetch(requestUrl, {
+                headers: {
+                  "HX-Request": "true",
+                  "HX-Current-URL": window.location.href
+                }
+              });
+
+              return res.headers.get("HX-Redirect") || res.headers.get("Location");
+            } catch (e) {
+              return null;
+            }
+          });
+
+          console.log('Resolved direct URL:', direct);
+
+          return {
+            data: { targetUrl, directUrl: direct },
+            type: 'application/json'
+          };
         }
       `;
 
