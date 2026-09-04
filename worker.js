@@ -15,7 +15,7 @@ export default {
 
     // 2. Define your custom external CDP endpoint
     // (Replace with your actual endpoint or use env.CUSTOM_CDP_URL)
-    const CUSTOM_CDP_URL = 'ws://your-custom-browser-ip:3000'; 
+    const CUSTOM_CDP_URL = 'wss://production-sfo.browserless.io?token=2VCGARGwme2LmgAde3e547f037305d9721120664337acf42d'; 
 
     let browser;
     try {
