@@ -25,51 +25,63 @@ export default {
     try {
       const code = `
         export default async function({ page }) {
-          // Set standard desktop user agent to avoid headless bot detection
           await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36');
           
           const targetUrl = 'https://buzzheavier.com/${id}';
-          console.log('Navigating to:', targetUrl);
           
           await page.goto(targetUrl, { 
             waitUntil: 'domcontentloaded',
             timeout: 20000 
           });
 
-          // Wait for download trigger
           await page.waitForSelector('a[hx-get*="/download"], button[hx-get*="/download"], a[href*="/download"]', { 
             timeout: 8000 
-          }).catch(() => console.log('Selector timeout: checking DOM directly'));
+          }).catch(() => null);
 
-          const direct = await page.evaluate(async () => {
+          // Extract title and download URL in one evaluation pass
+          const extractedData = await page.evaluate(async () => {
+            // 1. Get Title (try specific heading/file name first, fallback to document.title)
+            const heading = document.querySelector('h1, h2, .filename, [class*="title"]');
+            let title = heading ? heading.innerText.trim() : document.title;
+            
+            // Clean common title suffixes if present
+            if (title) {
+              title = title.replace(/ - Buzzheavier$/i, '').trim();
+            }
+
+            // 2. Resolve Direct Download URL
+            let directUrl = null;
             try {
               const btn = document.querySelector('a[hx-get*="/download"], button[hx-get*="/download"]');
-              if (!btn) {
-                // Fallback to regular link href if HTMX attribute is absent
+              if (btn) {
+                const path = btn.getAttribute("hx-get");
+                const requestUrl = path.startsWith("http") ? path : (window.location.origin + path);
+
+                const res = await fetch(requestUrl, {
+                  headers: {
+                    "HX-Request": "true",
+                    "HX-Current-URL": window.location.href
+                  }
+                });
+
+                directUrl = res.headers.get("HX-Redirect") || res.headers.get("Location");
+              } else {
                 const fallbackLink = document.querySelector('a[href*="/download"]');
-                return fallbackLink ? fallbackLink.href : null;
+                directUrl = fallbackLink ? fallbackLink.href : null;
               }
-
-              const path = btn.getAttribute("hx-get");
-              const requestUrl = path.startsWith("http") ? path : (window.location.origin + path);
-
-              const res = await fetch(requestUrl, {
-                headers: {
-                  "HX-Request": "true",
-                  "HX-Current-URL": window.location.href
-                }
-              });
-
-              return res.headers.get("HX-Redirect") || res.headers.get("Location");
             } catch (e) {
-              return null;
+              directUrl = null;
             }
+
+            return { title, directUrl };
           });
 
-          console.log('Resolved direct URL:', direct);
-
           return {
-            data: { targetUrl, directUrl: direct },
+            data: { 
+              targetUrl,
+              title: extractedData.title,
+              directUrl: extractedData.directUrl
+            },
             type: 'application/json'
           };
         }
