@@ -1,9 +1,9 @@
 {
   "name": "bzhr-wr",
   "version": "1.0.0",
-  "description": "Cloudflare Worker scraping with remote Playwright",
+  "type": "module",
   "main": "worker.js",
   "dependencies": {
-    "playwright-core": "^1.42.0"
+    "puppeteer-core": "^22.0.0"
   }
 }
