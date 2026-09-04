@@ -1,14 +1,9 @@
 {
-  "name": "buzzheavier-scraper-worker",
+  "name": "bzhr-wr",
   "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "deploy": "wrangler deploy"
-  },
+  "description": "Cloudflare Worker scraping with remote Playwright",
+  "main": "worker.js",
   "dependencies": {
-    "puppeteer-core": "^22.12.1"
-  },
-  "devDependencies": {
-    "wrangler": "^3.60.0"
+    "playwright-core": "^1.42.0"
   }
 }
