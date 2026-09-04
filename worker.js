@@ -1,4 +1,4 @@
-import puppeteer from 'puppeteer-core';
+import puppeteer from '@cloudflare/puppeteer';
 
 export default {
   async fetch(request, env, ctx) {
@@ -6,7 +6,7 @@ export default {
     const id = url.searchParams.get('id');
 
     if (!id) {
-      return new Response(JSON.stringify({ error: 'Missing "id" query parameter (e.g., ?id=123)' }), { 
+      return new Response(JSON.stringify({ error: 'Missing "id" query parameter' }), { 
         status: 400, 
         headers: { 'Content-Type': 'application/json' } 
       });
@@ -22,19 +22,18 @@ export default {
 
     let browser;
     try {
-      // Connect to the remote WebSocket endpoint
+      // Connect to Browserless over WebSocket
       browser = await puppeteer.connect({
         browserWSEndpoint: wsEndpoint,
       });
 
       const page = await browser.newPage();
 
-      // Navigate to target
       await page.goto(`https://buzzeavier.com/${id}`, { 
-        waitUntil: 'domcontentloaded' 
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
       });
 
-      // Execute the script in page context
       const redirectUrl = await page.evaluate(async () => {
         const btn = document.querySelector('a[hx-get*="/download"]');
         if (!btn) return null;
