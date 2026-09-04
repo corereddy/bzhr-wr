@@ -27,7 +27,7 @@ export default {
       // Browserless runs this Puppeteer script on their server
       const code = `
         export default async function({ page }) {
-          await page.goto('https://buzzeavier.com/${id}', { waitUntil: 'domcontentloaded' });
+          await page.goto('https://buzzheavier.com/${id}', { waitUntil: 'domcontentloaded' });
           
           const redirectUrl = await page.evaluate(async () => {
             const btn = document.querySelector('a[hx-get*="/download"]');
