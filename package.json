@@ -4,7 +4,6 @@
   "type": "module",
   "main": "worker.js",
   "dependencies": {
-    "puppeteer-core": "^22.0.0",
-    "chromium-bidi": "latest"
+    "@cloudflare/puppeteer": "^0.0.14"
   }
 }
